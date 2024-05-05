@@ -220,7 +220,7 @@ impl WaylandWindow {
                     &globals.qh,
                     surface.id(),
                 );
-                decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ClientSide);
+                decoration.set_mode(zxdg_toplevel_decoration_v1::Mode::ServerSide);
                 decoration
             });
 
