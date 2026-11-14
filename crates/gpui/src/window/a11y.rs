@@ -101,6 +101,8 @@
 use crate::*;
 
 pub(crate) mod debug;
+#[cfg(any(test, feature = "test-support"))]
+mod tree;
 
 use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
 use accesskit::{Action, NodeId, TreeUpdate};
@@ -128,6 +130,9 @@ pub(crate) struct A11y {
     ///
     /// [forcibly disabled]: crate::Application::new_inaccessible
     force_disabled: bool,
+    /// Whether the tree is built every frame, even with no assistive technology
+    /// connected. [`Self::force_disabled`] still wins.
+    forced: bool,
     /// Whether a11y features have been requested by the system.
     ///
     /// Updated by AccessKit using callbacks provided to the adapter. Can change
@@ -171,6 +176,7 @@ impl A11y {
     ) -> Self {
         Self {
             force_disabled,
+            forced: false,
             active_flag,
             active_this_frame: false,
             nodes: A11yNodeBuilder::new(),
@@ -210,7 +216,8 @@ impl A11y {
     /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
     /// for more commentary.
     pub(crate) fn sync_active_flag(&mut self) {
-        self.active_this_frame = self.is_enabled() && self.active_flag.load(Ordering::SeqCst);
+        self.active_this_frame =
+            self.is_enabled() && (self.forced || self.active_flag.load(Ordering::SeqCst));
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
