@@ -68,6 +68,8 @@ use std::{
 use uuid::Uuid;
 
 pub(crate) mod a11y;
+#[cfg(any(test, feature = "test-support"))]
+mod painted;
 mod prompts;
 
 pub use a11y::A11ySubtreeBuilder;
