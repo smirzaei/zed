@@ -21,9 +21,9 @@ pub enum AppSpriteKey {
     Color(u64),
     /// A mask with four bytes per pixel: the coverage of the pixel's red, green, and blue
     /// subpixels in that order, then a byte that is ignored. It is painted in a color, as GPUI
-    /// paints its own subpixel text. An app paints it only where
-    /// [`Window::paints_subpixel_text`] says the window does, and a window whose renderer has no
-    /// subpixel masks refuses it.
+    /// paints its own subpixel text, so tests read it through `Window::painted_subpixel_sprites`.
+    /// An app paints it only where [`Window::paints_subpixel_text`] says the window does, and a
+    /// window whose renderer has no subpixel masks refuses it.
     Subpixel(u64),
 }
 
@@ -80,6 +80,18 @@ impl Window {
     /// rendering mode.
     pub fn paints_subpixel_text(&self, font_id: FontId, font_size: Pixels) -> bool {
         self.should_use_subpixel_rendering(font_id, font_size)
+    }
+
+    /// For testing: sets whether the test window reports subpixel support, and schedules a redraw.
+    /// Panics unless this is a test window.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_subpixel_rendering_supported(&mut self, supported: bool) {
+        let test_window = self
+            .platform_window
+            .as_test()
+            .expect("only a test window's subpixel support can be set");
+        test_window.0.lock().subpixel_rendering_supported = supported;
+        self.refresh();
     }
 
     /// Paints a bitmap, which the app rasterized itself, into the scene for the next frame at the
@@ -206,8 +218,7 @@ mod tests {
 
     fn set_subpixel_support(cx: &mut TestAppContext, window: AnyWindowHandle, supported: bool) {
         cx.update_window(window, |_, window, _| {
-            let test_window = window.platform_window.as_test().unwrap();
-            test_window.0.lock().subpixel_rendering_supported = supported;
+            window.set_subpixel_rendering_supported(supported)
         })
         .unwrap();
     }
@@ -223,7 +234,6 @@ mod tests {
             }
         });
         set_subpixel_support(cx, window, true);
-        redraw(cx, window);
         window
     }
 
@@ -454,7 +464,7 @@ mod tests {
         cx.update_window(window, |_, window, _| {
             let clip = Bounds::new(point(px(0.), px(0.)), size(px(4.), px(4.)))
                 .scale(window.scale_factor());
-            let subpixel = &window.rendered_frame.scene.subpixel_sprites;
+            let subpixel = window.painted_subpixel_sprites();
             let masks = window.painted_monochrome_sprites();
             assert_eq!(subpixel.len(), 1, "the sprite outside the mask is culled");
             assert_eq!(masks.len(), 1);
@@ -492,17 +502,16 @@ mod tests {
         assert!(outcomes.borrow_mut().pop().unwrap().is_err());
         assert_eq!(rasterized.get(), 0);
         cx.update_window(window, |_, window, _| {
-            assert!(window.rendered_frame.scene.subpixel_sprites.is_empty());
+            assert!(window.painted_subpixel_sprites().is_empty());
             assert!(!window.sprite_atlas.contains(&key));
         })
         .unwrap();
 
         set_subpixel_support(cx, window, true);
-        redraw(cx, window);
         assert!(outcomes.borrow_mut().pop().unwrap().is_ok());
         assert_eq!(rasterized.get(), 1);
         cx.update_window(window, |_, window, _| {
-            assert_eq!(window.rendered_frame.scene.subpixel_sprites.len(), 1);
+            assert_eq!(window.painted_subpixel_sprites().len(), 1);
             assert!(window.sprite_atlas.contains(&key));
         })
         .unwrap();
@@ -526,7 +535,7 @@ mod tests {
 
         assert!(outcomes.borrow_mut().pop().unwrap().is_err());
         cx.update_window(window, |_, window, _| {
-            assert!(window.rendered_frame.scene.subpixel_sprites.is_empty());
+            assert!(window.painted_subpixel_sprites().is_empty());
             assert!(
                 !window
                     .sprite_atlas

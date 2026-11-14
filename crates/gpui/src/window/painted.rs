@@ -1,4 +1,4 @@
-use crate::{MonochromeSprite, Window};
+use crate::{MonochromeSprite, SubpixelSprite, Window};
 
 impl Window {
     /// Returns the monochrome sprites in the most recently rendered frame's scene. Monochrome
@@ -7,6 +7,14 @@ impl Window {
     /// paint time and won't appear.
     pub fn painted_monochrome_sprites(&self) -> &[MonochromeSprite] {
         &self.rendered_frame.scene.monochrome_sprites
+    }
+
+    /// Returns the subpixel sprites in the most recently rendered frame's scene. Subpixel text and
+    /// app sprites with a subpixel key paint as these. Bounds are in scaled pixels and not clipped
+    /// to the content mask; sprites that don't intersect it are culled at paint time and won't
+    /// appear.
+    pub fn painted_subpixel_sprites(&self) -> &[SubpixelSprite] {
+        &self.rendered_frame.scene.subpixel_sprites
     }
 }
 
