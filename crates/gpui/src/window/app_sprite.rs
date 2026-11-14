@@ -17,7 +17,8 @@ pub enum AppSpriteKey {
     /// sprite, so tests read it through `Window::painted_monochrome_sprites`.
     Mask(u64),
     /// A color bitmap with four bytes per pixel in blue, green, red, alpha order, where the color
-    /// channels are not premultiplied by alpha.
+    /// channels are not premultiplied by alpha. It is painted in its own colors, as a polychrome
+    /// sprite, so tests read it through `Window::painted_polychrome_sprites`.
     Color(u64),
     /// A mask with four bytes per pixel: the coverage of the pixel's red, green, and blue
     /// subpixels in that order, then a byte that is ignored. It is painted in a color, as GPUI
@@ -296,7 +297,7 @@ mod tests {
 
         cx.update_window(window, |_, window, _| {
             let masks = window.painted_monochrome_sprites();
-            let colors = &window.rendered_frame.scene.polychrome_sprites;
+            let colors = window.painted_polychrome_sprites();
             assert_eq!(masks.len(), 1);
             assert_eq!(colors.len(), 1);
             assert_eq!(masks[0].bounds, scaled_bounds(0., 0., 2., 2.));
@@ -364,7 +365,7 @@ mod tests {
             let clip = Bounds::new(point(px(0.), px(0.)), size(px(4.), px(4.)))
                 .scale(window.scale_factor());
             let masks = window.painted_monochrome_sprites();
-            let colors = &window.rendered_frame.scene.polychrome_sprites;
+            let colors = window.painted_polychrome_sprites();
             assert_eq!(masks.len(), 1, "the sprite outside the mask is culled");
             assert_eq!(colors.len(), 1);
             assert_eq!(masks[0].content_mask.bounds, clip);
