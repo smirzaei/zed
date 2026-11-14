@@ -68,11 +68,13 @@ use std::{
 use uuid::Uuid;
 
 pub(crate) mod a11y;
+mod app_sprite;
 #[cfg(any(test, feature = "test-support"))]
 mod painted;
 mod prompts;
 
 pub use a11y::A11ySubtreeBuilder;
+pub use app_sprite::AppSpriteKey;
 
 use self::a11y::A11y;
 #[cfg(not(target_family = "wasm"))]

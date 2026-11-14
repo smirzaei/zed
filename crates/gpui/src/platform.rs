@@ -1754,6 +1754,7 @@ pub enum AtlasKey {
     Glyph(RenderGlyphParams),
     Svg(RenderSvgParams),
     Image(RenderImageParams),
+    App(crate::AppSpriteKey),
 }
 
 impl AtlasKey {
@@ -1771,6 +1772,7 @@ impl AtlasKey {
             }
             AtlasKey::Svg(_) => AtlasTextureKind::Monochrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
+            AtlasKey::App(key) => key.texture_kind(),
         }
     }
 }
