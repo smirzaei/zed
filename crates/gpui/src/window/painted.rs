@@ -1,10 +1,10 @@
-use crate::{MonochromeSprite, SubpixelSprite, Window};
+use crate::{MonochromeSprite, PolychromeSprite, SubpixelSprite, Window};
 
 impl Window {
     /// Returns the monochrome sprites in the most recently rendered frame's scene. Monochrome
-    /// glyphs and SVG icons paint as these; emoji and subpixel text do not. Bounds are in scaled
-    /// pixels and not clipped to the content mask; sprites that don't intersect it are culled at
-    /// paint time and won't appear.
+    /// glyphs, SVG icons, and app sprites with a mask key paint as these; emoji, images, and
+    /// subpixel text do not. Bounds are in scaled pixels and not clipped to the content mask;
+    /// sprites that don't intersect it are culled at paint time and won't appear.
     pub fn painted_monochrome_sprites(&self) -> &[MonochromeSprite] {
         &self.rendered_frame.scene.monochrome_sprites
     }
@@ -15,6 +15,14 @@ impl Window {
     /// appear.
     pub fn painted_subpixel_sprites(&self) -> &[SubpixelSprite] {
         &self.rendered_frame.scene.subpixel_sprites
+    }
+
+    /// Returns the polychrome sprites in the most recently rendered frame's scene. Emoji, images,
+    /// and app sprites with a color key paint as these; monochrome and subpixel glyphs do not.
+    /// Bounds are in scaled pixels and not clipped to the content mask; sprites that don't
+    /// intersect it are culled at paint time and won't appear.
+    pub fn painted_polychrome_sprites(&self) -> &[PolychromeSprite] {
+        &self.rendered_frame.scene.polychrome_sprites
     }
 }
 
