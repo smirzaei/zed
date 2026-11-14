@@ -1,16 +1,16 @@
 use std::borrow::Cow;
 
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result, bail, ensure};
 
 use crate::{
-    AtlasKey, AtlasTextureKind, Bounds, DevicePixels, Hsla, MonochromeSprite, Point,
-    PolychromeSprite, Size, TransformationMatrix, Window,
+    AtlasKey, AtlasTextureKind, Bounds, DevicePixels, FontId, Hsla, MonochromeSprite, Pixels,
+    Point, PolychromeSprite, Size, SubpixelSprite, TransformationMatrix, Window,
 };
 
 /// Identifies a bitmap that an app rasterized itself, in a window's sprite atlas.
 ///
 /// The `u64` is the app's choice. Two bitmaps that differ in any way, such as in the scale factor
-/// they were rasterized at, need different ids. Ids of masks and of color bitmaps don't clash.
+/// they were rasterized at, need different ids. Ids of the three kinds don't clash.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AppSpriteKey {
     /// A mask with one byte of coverage per pixel. It is painted in a color, as a monochrome
@@ -19,6 +19,12 @@ pub enum AppSpriteKey {
     /// A color bitmap with four bytes per pixel in blue, green, red, alpha order, where the color
     /// channels are not premultiplied by alpha.
     Color(u64),
+    /// A mask with four bytes per pixel: the coverage of the pixel's red, green, and blue
+    /// subpixels in that order, then a byte that is ignored. It is painted in a color, as GPUI
+    /// paints its own subpixel text. An app paints it only where
+    /// [`Window::paints_subpixel_text`] says the window does, and a window whose renderer has no
+    /// subpixel masks refuses it.
+    Subpixel(u64),
 }
 
 impl AppSpriteKey {
@@ -26,13 +32,14 @@ impl AppSpriteKey {
         match self {
             Self::Mask(_) => AtlasTextureKind::Monochrome,
             Self::Color(_) => AtlasTextureKind::Polychrome,
+            Self::Subpixel(_) => AtlasTextureKind::Subpixel,
         }
     }
 
     fn check_bitmap(self, size: Size<DevicePixels>, bytes: &[u8]) -> Result<()> {
         let bytes_per_pixel = match self {
             Self::Mask(_) => 1,
-            Self::Color(_) => 4,
+            Self::Color(_) | Self::Subpixel(_) => 4,
         };
         ensure!(
             size.width.0 > 0 && size.height.0 > 0,
@@ -48,9 +55,33 @@ impl AppSpriteKey {
         );
         Ok(())
     }
+
+    /// Reorders the bytes of a checked bitmap into the order the platform's atlas holds them in.
+    /// Direct3D's atlas holds subpixel masks as RGBA. Every other renderer's holds them as BGRA,
+    /// as it holds color bitmaps.
+    fn reorder_for_atlas(self, bytes: &mut [u8]) {
+        if !matches!(self, Self::Subpixel(_)) || cfg!(target_os = "windows") {
+            return;
+        }
+        for pixel in bytes.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+    }
 }
 
 impl Window {
+    /// Returns whether the window paints text in `font_id` at `font_size` with subpixel masks, as
+    /// it does its own glyphs.
+    ///
+    /// An app that rasterizes glyphs itself asks this to match the text around them: it paints
+    /// [`AppSpriteKey::Subpixel`] bitmaps when this is true and [`AppSpriteKey::Mask`] bitmaps
+    /// otherwise. For glyphs in a font that GPUI's text system doesn't know, it passes the font
+    /// of the text around them. The answer changes with the window's background and the text
+    /// rendering mode.
+    pub fn paints_subpixel_text(&self, font_id: FontId, font_size: Pixels) -> bool {
+        self.should_use_subpixel_rendering(font_id, font_size)
+    }
+
     /// Paints a bitmap, which the app rasterized itself, into the scene for the next frame at the
     /// current z-index.
     ///
@@ -62,7 +93,8 @@ impl Window {
     /// A mask is painted in `color`. A color bitmap keeps its own colors and ignores it. Element
     /// opacity and the content mask apply as they do to glyphs. When `rasterize` fails or returns
     /// a bitmap that doesn't match its size, the error is returned and nothing is stored or
-    /// painted.
+    /// painted. A subpixel mask is refused likewise in a window whose renderer can't paint them,
+    /// such as on macOS.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_app_sprite(
@@ -74,6 +106,12 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
+        if matches!(key, AppSpriteKey::Subpixel(_))
+            && !self.platform_window.is_subpixel_rendering_supported()
+        {
+            bail!("the window's renderer can't paint {key:?}");
+        }
+
         let mut rasterize = Some(rasterize);
         let tile = self
             .sprite_atlas
@@ -81,8 +119,9 @@ impl Window {
                 let rasterize = rasterize
                     .take()
                     .context("the atlas built an app sprite twice")?;
-                let (size, bytes) = rasterize()?;
+                let (size, mut bytes) = rasterize()?;
                 key.check_bitmap(size, &bytes)?;
+                key.reorder_for_atlas(&mut bytes);
                 Ok(Some((size, Cow::Owned(bytes))))
             })?
             .expect("Callback above only errors or returns Some");
@@ -113,6 +152,15 @@ impl Window {
                 tile,
                 opacity,
             }),
+            AppSpriteKey::Subpixel(_) => self.next_frame.scene.insert_primitive(SubpixelSprite {
+                order: 0,
+                pad: 0,
+                bounds,
+                content_mask,
+                color: color.opacity(opacity),
+                tile,
+                transformation: TransformationMatrix::unit(),
+            }),
         }
         Ok(())
     }
@@ -129,8 +177,8 @@ mod tests {
 
     use crate::{
         AnyWindowHandle, AppContext as _, AppSpriteKey, AtlasKey, AtlasTextureKind, Bounds,
-        ContentMask, Context, DevicePixels, Hsla, IntoElement, Point, Render, ScaledPixels, Size,
-        Styled, TestAppContext, Window, canvas, hsla, point, px, size,
+        ContentMask, Context, DevicePixels, FontId, Hsla, IntoElement, Point, Render, ScaledPixels,
+        Size, Styled, TestAppContext, TextRenderingMode, Window, canvas, hsla, point, px, size,
     };
 
     const RED: Hsla = hsla(0., 1., 0.5, 1.);
@@ -154,6 +202,29 @@ mod tests {
     fn redraw(cx: &mut TestAppContext, window: AnyWindowHandle) {
         cx.update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .unwrap();
+    }
+
+    fn set_subpixel_support(cx: &mut TestAppContext, window: AnyWindowHandle, supported: bool) {
+        cx.update_window(window, |_, window, _| {
+            let test_window = window.platform_window.as_test().unwrap();
+            test_window.0.lock().subpixel_rendering_supported = supported;
+        })
+        .unwrap();
+    }
+
+    /// A window that supports subpixel masks and has painted once with them.
+    fn subpixel_window(
+        cx: &mut TestAppContext,
+        paint: impl Fn(&mut Window) + Clone + 'static,
+    ) -> AnyWindowHandle {
+        let window = paint_window(cx, move |window| {
+            if window.platform_window.is_subpixel_rendering_supported() {
+                paint(window);
+            }
+        });
+        set_subpixel_support(cx, window, true);
+        redraw(cx, window);
+        window
     }
 
     fn bitmap(width: i32, height: i32, bytes_per_pixel: usize) -> (Size<DevicePixels>, Vec<u8>) {
@@ -343,5 +414,165 @@ mod tests {
             assert!(window.sprite_atlas.contains(&key));
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_subpixel_sprite_paints_in_color_apart_from_a_mask_with_the_same_id(
+        cx: &mut TestAppContext,
+    ) {
+        let window = subpixel_window(cx, |window| {
+            let mask = ContentMask {
+                bounds: Bounds::new(point(px(0.), px(0.)), size(px(4.), px(4.))),
+            };
+            window.with_content_mask(Some(mask), |window| {
+                window.with_element_opacity(Some(0.5), |window| {
+                    window
+                        .paint_app_sprite(
+                            device_origin(2, 2),
+                            AppSpriteKey::Subpixel(1),
+                            RED,
+                            || Ok(bitmap(2, 2, 4)),
+                        )
+                        .unwrap();
+                    window
+                        .paint_app_sprite(device_origin(2, 2), AppSpriteKey::Mask(1), RED, || {
+                            Ok(bitmap(2, 2, 1))
+                        })
+                        .unwrap();
+                    window
+                        .paint_app_sprite(
+                            device_origin(50, 50),
+                            AppSpriteKey::Subpixel(1),
+                            RED,
+                            || Ok(bitmap(2, 2, 4)),
+                        )
+                        .unwrap();
+                });
+            });
+        });
+
+        cx.update_window(window, |_, window, _| {
+            let clip = Bounds::new(point(px(0.), px(0.)), size(px(4.), px(4.)))
+                .scale(window.scale_factor());
+            let subpixel = &window.rendered_frame.scene.subpixel_sprites;
+            let masks = window.painted_monochrome_sprites();
+            assert_eq!(subpixel.len(), 1, "the sprite outside the mask is culled");
+            assert_eq!(masks.len(), 1);
+            assert_eq!(subpixel[0].bounds, scaled_bounds(2., 2., 2., 2.));
+            assert_eq!(subpixel[0].content_mask.bounds, clip);
+            assert_eq!(subpixel[0].color, RED.opacity(0.5));
+            assert_eq!(subpixel[0].tile.texture_id.kind, AtlasTextureKind::Subpixel);
+            assert_eq!(masks[0].tile.texture_id.kind, AtlasTextureKind::Monochrome);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_subpixel_sprite_is_refused_where_the_renderer_has_none(cx: &mut TestAppContext) {
+        let outcomes: Rc<RefCell<Vec<Result<()>>>> = Rc::default();
+        let rasterized = Rc::new(Cell::new(0));
+        let window = paint_window(cx, {
+            let outcomes = outcomes.clone();
+            let rasterized = rasterized.clone();
+            move |window| {
+                let outcome = window.paint_app_sprite(
+                    device_origin(0, 0),
+                    AppSpriteKey::Subpixel(1),
+                    RED,
+                    || {
+                        rasterized.set(rasterized.get() + 1);
+                        Ok(bitmap(2, 2, 4))
+                    },
+                );
+                outcomes.borrow_mut().push(outcome);
+            }
+        });
+
+        let key = AtlasKey::App(AppSpriteKey::Subpixel(1));
+        assert!(outcomes.borrow_mut().pop().unwrap().is_err());
+        assert_eq!(rasterized.get(), 0);
+        cx.update_window(window, |_, window, _| {
+            assert!(window.rendered_frame.scene.subpixel_sprites.is_empty());
+            assert!(!window.sprite_atlas.contains(&key));
+        })
+        .unwrap();
+
+        set_subpixel_support(cx, window, true);
+        redraw(cx, window);
+        assert!(outcomes.borrow_mut().pop().unwrap().is_ok());
+        assert_eq!(rasterized.get(), 1);
+        cx.update_window(window, |_, window, _| {
+            assert_eq!(window.rendered_frame.scene.subpixel_sprites.len(), 1);
+            assert!(window.sprite_atlas.contains(&key));
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_subpixel_sprite_needs_four_bytes_per_pixel(cx: &mut TestAppContext) {
+        let outcomes: Rc<RefCell<Vec<Result<()>>>> = Rc::default();
+        let window = subpixel_window(cx, {
+            let outcomes = outcomes.clone();
+            move |window| {
+                let outcome = window.paint_app_sprite(
+                    device_origin(0, 0),
+                    AppSpriteKey::Subpixel(1),
+                    RED,
+                    || Ok(bitmap(2, 2, 1)),
+                );
+                outcomes.borrow_mut().push(outcome);
+            }
+        });
+
+        assert!(outcomes.borrow_mut().pop().unwrap().is_err());
+        cx.update_window(window, |_, window, _| {
+            assert!(window.rendered_frame.scene.subpixel_sprites.is_empty());
+            assert!(
+                !window
+                    .sprite_atlas
+                    .contains(&AtlasKey::App(AppSpriteKey::Subpixel(1)))
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_paints_subpixel_text_needs_support_and_the_subpixel_mode(cx: &mut TestAppContext) {
+        let window = paint_window(cx, |_| {});
+        let paints_subpixel_text = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, _| {
+                window.paints_subpixel_text(FontId(0), px(14.))
+            })
+            .unwrap()
+        };
+
+        cx.update(|cx| cx.set_text_rendering_mode(TextRenderingMode::Subpixel));
+        assert!(!paints_subpixel_text(cx), "the window has no support");
+
+        set_subpixel_support(cx, window, true);
+        assert!(paints_subpixel_text(cx));
+
+        cx.update(|cx| cx.set_text_rendering_mode(TextRenderingMode::Grayscale));
+        assert!(!paints_subpixel_text(cx));
+    }
+
+    #[test]
+    fn test_subpixel_bytes_reach_the_atlas_in_its_order() {
+        let (red, green, blue, ignored) = (1, 2, 3, 4);
+        let mut subpixel = [red, green, blue, ignored, 5, 6, 7, 8];
+        let mut color = subpixel;
+        let mut mask = subpixel;
+        AppSpriteKey::Subpixel(1).reorder_for_atlas(&mut subpixel);
+        AppSpriteKey::Color(1).reorder_for_atlas(&mut color);
+        AppSpriteKey::Mask(1).reorder_for_atlas(&mut mask);
+
+        let expected = if cfg!(target_os = "windows") {
+            [red, green, blue, ignored, 5, 6, 7, 8]
+        } else {
+            [blue, green, red, ignored, 7, 6, 5, 8]
+        };
+        assert_eq!(subpixel, expected);
+        assert_eq!(color, [red, green, blue, ignored, 5, 6, 7, 8]);
+        assert_eq!(mask, [red, green, blue, ignored, 5, 6, 7, 8]);
     }
 }
