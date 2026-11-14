@@ -1941,6 +1941,13 @@ impl App {
         self.platform.delete_credentials(url)
     }
 
+    /// Sets the label of the keyring items that hold credentials. Only Linux and FreeBSD use it.
+    /// Reads and deletes find only items with the current label, so call this before any
+    /// credential call.
+    pub fn set_keyring_label(&self, label: impl Into<SharedString>) {
+        self.platform.set_keyring_label(label.into());
+    }
+
     /// Directs the platform's default browser to open the given URL.
     pub fn open_url(&self, url: &str) {
         self.platform.open_url(url);

@@ -97,6 +97,7 @@ pub(crate) struct LinuxCommon {
     pub(crate) callbacks: PlatformHandlers,
     pub(crate) signal: LoopSignal,
     pub(crate) menus: Vec<OwnedMenu>,
+    keyring_label: gpui::SharedString,
     app_name: Option<String>,
     system_notifications: crate::linux::system_notifications::SystemNotificationState,
     #[cfg_attr(
@@ -147,6 +148,7 @@ impl LinuxCommon {
             callbacks,
             signal,
             menus: Vec::new(),
+            keyring_label: KEYRING_LABEL.into(),
             app_name: None,
             system_notifications: crate::linux::system_notifications::SystemNotificationState::new(
             ),
@@ -1083,12 +1085,13 @@ impl Platform for LinuxPlatform {
         let url = url.to_string();
         let username = username.to_string();
         let password = password.to_vec();
+        let keyring_label = self.with_common(|common| common.keyring_label.clone());
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
             keyring.unlock().await?;
             keyring
                 .create_item(
-                    KEYRING_LABEL,
+                    &keyring_label,
                     &vec![("url", &url), ("username", &username)],
                     password,
                     true,
@@ -1100,6 +1103,7 @@ impl Platform for LinuxPlatform {
 
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
         let url = url.to_string();
+        let keyring_label = self.with_common(|common| common.keyring_label.clone());
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
             keyring.unlock().await?;
@@ -1107,7 +1111,7 @@ impl Platform for LinuxPlatform {
             let items = keyring.search_items(&vec![("url", &url)]).await?;
 
             for item in items.into_iter() {
-                if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                if item.label().await.is_ok_and(|label| label == keyring_label) {
                     let attributes = item.attributes().await?;
                     let username = attributes
                         .get("username")
@@ -1128,6 +1132,7 @@ impl Platform for LinuxPlatform {
 
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
         let url = url.to_string();
+        let keyring_label = self.with_common(|common| common.keyring_label.clone());
         self.background_executor().spawn(async move {
             let keyring = oo7::Keyring::new().await?;
             keyring.unlock().await?;
@@ -1135,7 +1140,7 @@ impl Platform for LinuxPlatform {
             let items = keyring.search_items(&vec![("url", &url)]).await?;
 
             for item in items.into_iter() {
-                if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                if item.label().await.is_ok_and(|label| label == keyring_label) {
                     item.delete().await?;
                     return Ok(());
                 }
@@ -1143,6 +1148,10 @@ impl Platform for LinuxPlatform {
 
             Ok(())
         })
+    }
+
+    fn set_keyring_label(&self, label: gpui::SharedString) {
+        self.with_common(|common| common.keyring_label = label);
     }
 
     fn window_appearance(&self) -> WindowAppearance {
@@ -1791,6 +1800,14 @@ mod tests {
             *calls.borrow(),
             [(PowerMode::LowPower, false), (PowerMode::Balanced, true)]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn keyring_label_starts_as_zeds() -> anyhow::Result<()> {
+        let event_loop = EventLoop::<()>::try_new()?;
+        let (common, _, _) = LinuxCommon::new(event_loop.get_signal());
+        assert_eq!(common.keyring_label, KEYRING_LABEL);
         Ok(())
     }
 
