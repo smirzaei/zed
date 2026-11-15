@@ -1284,6 +1284,9 @@ impl AnyWindowHandle {
 }
 
 #[cfg(test)]
+mod teardown;
+
+#[cfg(test)]
 mod tests {
     use crate::{
         PathPromptOptions, SystemNotification, SystemNotificationAction,
