@@ -6612,7 +6612,9 @@ impl Window {
         self.pending_input.is_none()
     }
 
-    pub(crate) fn clear_pending_keystrokes(&mut self, cx: &mut App) {
+    /// Drops the pending keystrokes without replaying them. If any were pending, the pending-input
+    /// observers are notified at the end of the current effect cycle.
+    pub fn clear_pending_keystrokes(&mut self, cx: &mut App) {
         if self.pending_input.take().is_some() {
             self.defer_pending_input_changed(cx);
         }

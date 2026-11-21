@@ -640,6 +640,8 @@ mod tests {
         VisualTestContext, Window,
     };
 
+    mod clear_pending;
+
     actions!(dispatch_test, [TestAction, SecondaryTestAction]);
 
     fn test_dispatch_tree(bindings: Vec<KeyBinding>) -> DispatchTree {
