@@ -16,6 +16,8 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+mod lock_order;
+
 #[test]
 fn test_foreground_executor_spawn() {
     let result = TestScheduler::once(async |scheduler| {
