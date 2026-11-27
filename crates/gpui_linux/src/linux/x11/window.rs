@@ -1275,6 +1275,15 @@ impl X11WindowStatePtr {
         }
     }
 
+    pub fn query_accepts_focused_text_input(&self) -> bool {
+        let Some(mut input_handler) = self.state.borrow_mut().input_handler.take() else {
+            return false;
+        };
+        let accepts_text_input = input_handler.query_accepts_focused_text_input();
+        self.state.borrow_mut().input_handler = Some(input_handler);
+        accepts_text_input
+    }
+
     pub fn get_ime_area(&self) -> Option<Bounds<ScaledPixels>> {
         let mut state = self.state.borrow_mut();
         let scale_factor = state.scale_factor;

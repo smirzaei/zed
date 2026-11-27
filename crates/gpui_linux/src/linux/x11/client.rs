@@ -224,6 +224,9 @@ pub struct X11ClientState {
     pub(crate) compose_state: Option<xkbc::compose::State>,
     pub(crate) pre_edit_text: Option<String>,
     pub(crate) composing: bool,
+    /// Whether a key reached the input method since its last reset. An input method that draws
+    /// its composition in its own panel sends GPUI no preedit, so `composing` can miss it.
+    pub(crate) forwarded_since_reset: bool,
     pub(crate) pre_key_char_down: Option<Keystroke>,
     pub(crate) cursor_handle: cursor::Handle,
     pub(crate) cursor_styles: HashMap<xproto::Window, CursorStyle>,
@@ -540,6 +543,7 @@ impl X11Connection {
                 pre_edit_text: None,
                 pre_key_char_down: None,
                 composing: false,
+                forwarded_since_reset: false,
 
                 cursor_handle,
                 cursor_styles: HashMap::default(),
@@ -861,6 +865,7 @@ impl X11Client {
     pub fn reset_ime(&self) {
         let mut state = self.0.borrow_mut();
         state.composing = false;
+        state.forwarded_since_reset = false;
         if let Some(mut ximc) = state.ximc.take() {
             if let Some(xim_handler) = state.xim_handler.as_ref() {
                 ximc.reset_ic(xim_handler.im_id, xim_handler.ic_id).ok();
@@ -1524,6 +1529,12 @@ impl X11Client {
     }
 
     fn xim_handle_event(&self, event: Event) -> Option<()> {
+        if let Event::KeyPress(key) | Event::KeyRelease(key) = &event
+            && self.bypass_xim(key)
+        {
+            self.handle_event(event);
+            return Some(());
+        }
         match event {
             Event::KeyPress(event) | Event::KeyRelease(event) => {
                 let mut state = self.0.borrow_mut();
@@ -1533,6 +1544,7 @@ impl X11Client {
                     event.detail.into(),
                 ));
                 let (mut ximc, mut xim_handler) = state.take_xim()?;
+                state.forwarded_since_reset = true;
                 drop(state);
                 xim_handler.window = event.event;
                 ximc.forward_event(
